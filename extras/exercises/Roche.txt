@@ -1,0 +1,2313 @@
+1. BM25 Best Match 25 代算法
+
+所以LangChain只是封装了一层接口，算法本身早就存在。
+
+你的理解对不对？
+"它可以不理解意思，但只看表面符合就可以"
+
+基本对，但更准确的说法是：
+
+它不理解语义，但它精确计算词的统计重要性。它知道"Error_4021"这个词很罕见所以很重要，它知道"the"这个词到处都有所以不重要。这不是"理解意思"，但也不只是简单的字符匹配，是有数学依据的统计方法。
+
+
+2. "你的chunk_size=1000，用的是字符数还是token数？"
+
+这是个陷阱。
+
+直接回答：
+
+LangChain的RecursiveCharacterTextSplitter默认按字符数切，不是token数。
+
+但LLM的context window限制是按token算的。
+
+中文1个字≈1个token，英文1个词≈1-2个token。所以1000字符的英文chunk大概是500-700个token。
+
+为什么这个重要：
+
+你用的是text-embedding-3-large，它的最大输入是8191个token。你k=5召回5个chunk，每个~700token，加上prompt，总共大概4000-5000token，在限制内，是合理的。
+
+面试时这样说：
+
+"chunk_size=1000是字符数，不是token数。英文文档大概对应500-700token。我选这个值是考虑到k=5召回后总输入要控制在LLM的context window以内，同时保证每个chunk有足够的上下文信息。"
+
+Splitter	核心逻辑	最适合	你的项目相关性
+CharacterTextSplitter	单一分隔符	格式规整文本	❌ 太简单
+RecursiveCharacterTextSplitter	递归分隔符	通用文本	✅ 现在用的
+MarkdownHeaderTextSplitter	按标题层级	.md文件	⭐ 应该升级
+TokenTextSplitter	按token数	成本敏感生产环境	🔶 可选
+Language Splitter	按代码结构	代码库	❌ 不适用
+HTMLHeaderTextSplitter	按HTML标签	网页内容	❌ 不适用
+
+3. Harness
+
+System prompt只是告诉LLM"你应该怎么表现"，但LLM可以忽略，可以跑偏，可以幻觉。
+
+Harness是代码层面的约束，不是语言层面的请求。
+
+举个例子：
+
+System Prompt说：  "请不要编造答案"
+→ LLM可能还是编造，因为这只是一句话
+
+Harness做：       if len(docs) == 0: return 固定的fallback文本
+→ LLM根本没有机会编造，因为代码直接返回了
+这是本质区别：一个是"求LLM守规矩"，一个是"用代码强制守规矩"。
+
+Harness的三个核心职责
+第一：控制执行顺序（Orchestration）
+
+用户输入
+  → classify_query_skill（分类）
+  → retrieve_docs_skill（检索）
+  → apply_rules_skill（规则）
+  → generate_answer_skill（生成）
+  → 输出
+每一步都是Harness调用的，LLM只参与最后一步生成，其他步骤LLM碰不到。
+
+第二：在每一步加校验（Validation）
+
+
+Copy
+python
+# 你代码里的真实例子
+if len(docs) == 0:
+    return fallback_response  # LLM根本不被调用
+检索结果为空，直接返回，不让LLM去猜。
+
+第三：保证输出格式一致（Output Control）
+
+
+Copy
+python
+# 你代码里的真实例子
+if "建议操作步骤" not in answer:
+    answer += actions_text  # 强制补充格式
+LLM忘了写某个部分，Harness帮你补上。
+
+面试时怎么说
+"Harness是整个系统的控制层。它和system prompt的本质区别是：system prompt是用语言请求LLM守规矩，Harness是用代码强制守规矩。比如检索结果为空时，Harness直接返回fallback，LLM根本没有机会被调用，从根本上避免了幻觉。同时Harness控制每个Skill的执行顺序，保证输出格式一致，处理每一步的异常。这个设计在工业场景里很重要，因为你不能依赖LLM的自觉性。"
+
+一句话总结
+Skill是能力，Harness是纪律。
+
+Skill告诉系统能做什么，Harness告诉系统必须怎么做、不能做什么。
+
+
+┌─────────────────────────────────────────────────┐
+│                 MULTI-AGENT                      │
+│                                                  │
+│   ┌─────────────┐      ┌─────────────┐          │
+│   │  Agent A    │      │  Agent B    │  ...      │
+│   │  (文档问答)  │      │  (图表分析)  │          │
+│   │             │      │             │          │
+│   │ ┌─────────┐ │      │ ┌─────────┐ │          │
+│   │ │ Harness │ │      │ │ Harness │ │          │
+│   │ │         │ │      │ │         │ │          │
+│   │ │┌───────┐│ │      │ │┌───────┐│ │          │
+│   │ ││Skill1 ││ │      │ ││Skill1 ││ │          │
+│   │ ││Skill2 ││ │      │ ││Skill2 ││ │          │
+│   │ ││       ││ │      │ ││       ││ │          │
+│   │ ││[Chain]││ │      │ ││[Chain]││ │          │
+│   │ ││  ↕    ││ │      │ ││  ↕    ││ │          │
+│   │ ││
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    两条路线
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【受控流程路线】              【自主决策路线】
+
+    Prompt                      Prompt
+      ↓                           ↓
+    Chain                       Chain
+      ↓                           ↓
+    Skill ←─────────────────→  Tool
+（被Harness调用）           （被Agent调用）
+      ↓                           ↓
+    Harness                     Agent
+  （代码决策）                 （LLM决策）
+      ↓                    ↙         ↘
+    输出              MCP协议      MCP协议
+                         ↓              ↓
+                      Tool A         Tool B
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                  两条路线都可以扩展到
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+                    Multi-Agent
+
+         ┌──────────────────────────────┐
+         │      Orchestrator Agent      │
+         │         （总调度）            │
+         └──────────┬───────────────────┘
+                    │
+        ┌───────────┼───────────┐
+        ↓           ↓           ↓
+   Agent A       Agent B     Agent C
+  （文档问答）   （图表分析）  （故障诊断）
+      ↓               ↓           ↓
+  Harness          Harness     Harness
+  （可控）          （可控）     （可控）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              MCP在Multi-Agent里的位置
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Agent A ──MCP──→ MCP Server ──→ 数据库查询Tool
+  Agent B ──MCP──→ MCP Server ──→ 图表解析Tool
+  Agent C ──MCP──→ MCP Server ──→ 规则引擎Tool
+
+  所有Agent说同一种语言，Tool可以即插即用
+  
+  
+4. Metrics
+
+IR: RAG中的R 就是检索/召回的准确率， 
+MRR:最相关的出现在那几名
+NDCG:前N个按照各自相关度/完美排序（按相关度），相关度高但拍在后面的处罚越狠
+precision@K:相关的个数/召回总数
+recall@K:相关的个数/总共相关的个数
+K越大，Recall越高，Precision月底，所以K=5是经验总结
+
+G:Generation准确率
+
+ROUGE
+全称： Recall-Oriented Understudy for Gisting Evaluation
+
+解决什么问题： 生成的答案和标准答案有多少词重叠？
+
+本质： 数词的重叠比例，不理解语义。
+
+三个变体：
+
+ROUGE-1： 单个词的重叠
+
+标准答案：the cat sat on the mat
+生成答案：the cat is on the mat
+
+重叠词：the, cat, on, the, mat = 5个
+ROUGE-1 = 5/6 = 0.83
+ROUGE-2： 连续两个词（bigram）的重叠
+
+标准答案：the cat sat on the mat
+生成答案：the cat is on the mat
+
+重叠bigram：[the cat], [on the], [the mat] = 3个
+ROUGE-2 = 3/5 = 0.6
+ROUGE-L： 最长公共子序列，考虑词序。
+
+适合场景： 摘要任务，答案较长的生成评估。
+
+缺点： 不理解语义，"happy"和"joyful"意思一样但ROUGE认为不重叠。
+
+
+BLEU
+全称： Bilingual Evaluation Understudy
+
+解决什么问题： 和ROUGE类似，但更偏向Precision（生成的词有多少出现在标准答案里）。
+
+核心公式：
+
+不用背公式，记住这几点：
+
+ROUGE偏重Recall（标准答案的词有没有被覆盖）
+BLEU偏重Precision（生成的词有没有在标准答案里）
+两者都是数词，不理解语义
+原本用于机器翻译评估，现在也用于生成任务
+ROUGE vs BLEU：
+
+Table
+
+
+ROUGE	BLEU
+偏重	Recall	Precision
+起源	文本摘要	机器翻译
+共同缺点	不理解语义	不理解语义
+
+
+RAG评估体系
+│
+├── 检索质量（Retrieval）
+│   ├── Precision@K    召回的里有多少是对的
+│   ├── Recall@K       相关的有多少被召回
+│   ├── MRR            第一个正确结果排第几
+│   └── NDCG           前K个整体排序质量
+│
+└── 生成质量（Generation）
+    ├── 通用指标
+    │   ├── ROUGE      词重叠，偏Recall
+    │   └── BLEU       词重叠，偏Precision
+    │
+    └── RAG专用（RAGAS框架）
+        ├── Faithfulness      有没有幻觉
+        ├── Answer Relevancy  有没有跑题
+        ├── Context Recall    文档覆盖了多少需要的信息
+        └── Context Precision 召回的文档有多少是有用的
+		
+		
+问题1：RAGAS的Context指标 vs 检索质量的Precision/Recall
+表面上名字像，但评估角度完全不同。
+
+检索质量的Precision@K / Recall@K：
+
+评估的是：检索系统本身好不好
+标准答案：人工标注的"哪些文档是相关的"
+问的是：你的retriever找得准不准
+独立于LLM，不管生成结果
+RAGAS的Context Precision / Context Recall：
+
+评估的是：检索到的文档对生成有没有帮助
+标准答案：最终的正确答案
+问的是：检索结果有没有支撑生成
+和LLM生成结果挂钩，不能独立评估
+用一个例子说清楚：
+
+用户问：Strela怎么导出报告？
+
+检索召回5个chunk：
+  chunk1：关于导出功能 ✅
+  chunk2：关于导出功能 ✅
+  chunk3：关于登录功能 ❌
+  chunk4：关于报告格式 ✅
+  chunk5：关于用户权限 ❌
+
+检索质量Precision@5：
+  = 3/5 = 0.6
+  只看这5个chunk里有几个和"导出报告"相关
+  和最终生成的答案无关
+
+RAGAS Context Precision：
+  看的是：这5个chunk里，有几个真正被LLM用来生成答案了？
+  如果LLM只用了chunk1和chunk2，chunk4没用上
+  = 2/5 = 0.4
+  衡量的是检索对生成的贡献
+一句话总结：
+
+Table
+
+
+检索Precision/Recall	RAGAS Context指标
+评估对象	检索系统	检索对生成的贡献
+标准答案	人工标注相关文档	最终正确答案
+是否需要LLM	❌ 不需要	✅ 需要
+问题2：BLEU和ROUGE的理解
+你的理解基本对，但需要补一个细节。
+
+BLEU（偏Precision）：
+
+你说的对：生成了很多词，但重叠少，分数低。
+
+标准答案：the cat sat on the mat（6个词）
+生成答案：the cat is walking on the beautiful mat（9个词）
+
+重叠词：the, cat, on, the, mat = 5个
+Precision = 5/9 = 0.56
+
+生成越多无关的词，分母越大，分数越低
+还有一个BP惩罚项（Brevity Penalty）：
+如果生成的答案比标准答案短太多，也会被惩罚。防止模型只生成"the"这一个词来刷高Precision。
+
+ROUGE（偏Recall）：
+
+你说的对：覆盖了标准答案的词，不管生成多少，分数就高。
+
+标准答案：the cat sat on the mat（6个词）
+生成答案：the cat is walking on the beautiful mat in the room（12个词）
+
+重叠词：the, cat, on, the, mat = 5个
+Recall = 5/6 = 0.83
+
+不管生成了多少额外的词，只看覆盖了多少标准答案的词
+所以两者的极端情况：
+
+ROUGE极端：把整个知识库都输出，覆盖率100%，ROUGE=1.0
+  → 所以ROUGE高不代表答案好，可能只是废话很多
+
+BLEU极端：只输出标准答案里出现过的词，Precision=1.0
+  → 但BP惩罚项会惩罚太短的答案
+
+这就是为什么实际使用时两个要结合看，或者用F1综合
+问题3：哪个指标适合哪个场合，分数预估
+各指标适用场景：
+
+Table
+
+
+指标	最适合场景	不适合场景
+Precision@K	搜索引擎，用户只看前几个结果	需要找全所有相关文档
+Recall@K	医疗/法律，不能漏掉任何相关信息	对精度要求高的场景
+MRR	问答系统，用户只关心第一个答案	需要多个答案的场景
+NDCG	推荐系统，排序质量重要	只关心有没有，不关心顺序
+ROUGE	摘要任务，答案较长	单句问答
+BLEU	机器翻译，有标准译文	开放式问答
+Faithfulness	RAG必用，防幻觉	创意写作
+Answer Relevancy	RAG必用，防跑题	摘要任务
+Context Recall	知识密集型问答	闲聊系统
+Context Precision	成本敏感，要减少无效检索	召回率优先场景
+你的Strela项目，最重要的三个：
+
+第一：Faithfulness
+原因：企业内部软件手册，答案必须100%基于文档
+     不能有任何编造，用户会按答案操作真实系统
+
+第二：Context Recall
+原因：手册里的信息必须被找到
+     漏掉关键步骤，用户操作会出错
+
+第三：Answer Relevancy
+原因：用户问具体操作，答案不能跑题
+     跑题的答案对用户毫无帮助
+你的项目各指标预估分数：
+
+这是基于你的系统设计给出的合理预估，不是瞎编。
+
+Table
+
+
+指标	预估分数	理由
+Precision@5	0.55~0.70	Hybrid Search比纯语义强，但.md文档质量参差不齐
+Recall@5	0.60~0.75	k=5对简单问题够，复杂多步骤问题可能漏
+MRR	0.65~0.80	关键词问题BM25命中率高，语义问题稍弱
+ROUGE-1	0.40~0.60	手册类文档词汇重叠中等，不是摘要任务
+BLEU	0.25~0.45	开放式问答BLEU天然偏低，正常现象
+Faithfulness	0.75~0.90	Harness有source grounding约束，幻觉风险低
+Answer Relevancy	0.70~0.85	问题分类+定向检索保证相关性
+Context Recall	0.60~0.75	取决于文档覆盖度，手册完整性是瓶颈
+Context Precision	0.50~0.65	5个chunk里通常2-3个真正有用
+面试时怎么说这些分数：
+
+"我没有做完整的benchmark，但基于系统设计可以预估。
+Faithfulness应该是最高的，因为Harness有强制source grounding，
+LLM没有文档依据时直接返回fallback。
+BLEU会偏低，但这是开放式问答的正常现象，不代表答案质量差。
+对我这个场景，我最关注Faithfulness和Context Recall，前者保证不编造，后者保证不漏信息。"
+
+问题4：主观指标（Faithfulness和Answer Relevancy）怎么评估
+这两个指标没有人工标注的标准答案，怎么算？
+
+答案是：用LLM来评估LLM，叫做LLM-as-Judge。
+
+Faithfulness评估流程：
+  1. 把生成的答案拆成若干个claim
+     例："Strela支持Excel导出" "需要管理员权限"
+  2. 对每个claim，问LLM：
+     "这个claim在检索到的文档里有没有依据？"
+  3. 有依据的claim数 / 总claim数 = Faithfulness分数
+
+Answer Relevancy评估流程：
+  1. 把生成的答案给LLM
+  2. 让LLM根据答案反推：这个答案是在回答什么问题？
+  3. 反推的问题和原始问题的相似度 = Answer Relevancy分数
+这就是为什么这两个指标需要代码实现，下一轮我给你写。
+
+ROUGE和BLEU：关键假设，因为不理解语义， 好答案和标准答案的重叠一定很高，无法评价好答案和标准答案中心思想都一样，但重叠字很少
+
+
+Rouge BLEU 词汇匹配
+Bert_Score 语义匹配
+
+
+# 依赖：
+#   pip install rouge-score nltk
+#   import nltk; nltk.download('punkt_tab')
+#
+# 不修改任何现有代码，完全独立模块
+# ============================================================
+
+import nltk
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
+from typing import List, Dict
+
+指标	匹配方式	能识别同义词	适合评估
+ROUGE	n-gram 字面重叠	❌	内容覆盖度
+BLEU	n-gram 精确率	❌	措辞精确度
+BERTScore	词向量余弦相似度	✅	语义相似度
+
+所以严格来说，RAGAS 的核心优势是：
+
+如果你不跑 Context Recall
+→ 完全不需要 ground_truth
+→ 只需要问题本身
+
+如果你跑 Context Recall
+→ 只需要一句话的核心答案
+→ 不需要像 ROUGE/BLEU 那样精确的标准答案
+→ 因为 LLM 做语义判断，不是词汇匹配
+
+Answer Relevancy 的完整流程：
+
+Step1：LLM 根据模型答案，反向生成 n 个问题
+       （默认生成3个）
+
+       模型答案："Open browser, go to BASF network,
+                 find Strela app, click Batch Analysis"
+            ↓ LLM 反向生成
+       生成问题1："How do I open Strela Batch Analysis?"
+       生成问题2："Where is the Batch Analysis module?"
+       生成问题3："How do I navigate to Strela?"
+
+Step2：用 Embedding 模型把这些问题编码成向量
+       原始问题    → 向量A
+       生成问题1   → 向量B1
+       生成问题2   → 向量B2
+       生成问题3   → 向量B3
+
+Step3：计算余弦相似度
+       cosine(向量A, 向量B1) = 0.91
+       cosine(向量A, 向量B2) = 0.88
+       cosine(向量A, 向量B3) = 0.85
+
+Step4：取平均
+       Answer Relevancy = (0.91 + 0.88 + 0.85) / 3 = 0.88
+所以用的是 余弦相似度，和 BERTScore 一样，但有一个关键区别：
+
+BERTScore
+    用 BERT 对每个词编码
+    词级别的向量匹配
+
+Answer Relevancy
+    用 OpenAI text-embedding-3-small 对整句话编码
+    句子级别的向量匹配
+	
+方法一：Query Rewriting（问题重写）
+    用 LLM 把模糊问题改写成清晰的检索友好问题
+    最简单，最常用
+
+方法二：HyDE
+（Hypothetical Document Embedding，假设性文档嵌入）
+    不改写问题，而是让 LLM 先生成一个假设答案
+    用假设答案去检索，而不是用问题去检索
+    原理：答案的向量比问题的向量更接近文档
+
+方法三：Multi-Query Retrieval（多路检索）
+    把一个问题改写成多个不同角度的问题
+    每个问题分别检索
+    合并结果，去重
+    覆盖面更广
+	
+	
+	RAG评估体系
+│
+├── 检索质量（Retrieval）
+│   │
+│   ├── 传统IR指标（不需要LLM，基于文档ID匹配）
+│   │   ├── Hit Rate        top-k里有没有正确文档（二元，有=1/没有=0）
+│   │   ├── MRR             第一个正确文档排第几（越靠前越好）
+│   │   ├── Precision@K     top-k里有多少是相关文档
+│   │   ├── Recall@K        所有相关文档里有多少被召回
+│   │   └── NDCG@K          top-k整体排序质量（考虑位置权重）
+│   │
+│   └── 计算成本：低（规则匹配，不需要LLM）
+│
+└── 生成质量（Generation）
+    │
+    ├── 通用NLP指标（基于词重叠，不需要LLM）
+    │   ├── ROUGE     词重叠，偏Recall（答案有没有覆盖参考答案）
+    │   └── BLEU      词重叠，偏Precision（答案有多少词在参考答案里）
+    │
+    └── RAG专用（RAGAS框架，需要LLM判断）
+        │
+        ├── 检索内容质量（评价检索结果对生成的价值）
+        │   ├── Context Precision   召回的文档里有多少是真正有用的
+        │   └── Context Recall      生成答案所需信息有没有被文档覆盖
+        │
+        └── 生成答案质量
+            ├── Faithfulness        答案有没有幻觉（是否忠实于文档）
+            └── Answer Relevancy    答案有没有跑题（是否回答了问题）
+			
+			
+
+为什么要保存 tokenizer？
+基础模型的 tokenizer：通用版本
+                       pad_token 没有设置（很多模型默认没有）
+
+你训练时修改了：
+    tokenizer.pad_token = tokenizer.eos_token  ← 这行改了配置
+
+如果不保存：
+    推理时加载原始 tokenizer
+    pad_token 又没了
+    输入格式和训练时不一致
+    → 推理结果变差甚至报错
+所以保存 tokenizer 是为了保证推理时的输入格式和训练时完全一致。
+
+
+
+面试总结：Strela RAG 系统
+背景和动机
+我在实验室做的这个项目，是为了解决一个实际问题：我们用的化学软件叫 Strela，它有一套很厚的操作手册，同事经常需要查某个功能怎么用、某个错误怎么解决，但每次翻 PDF 很费时间。所以我用 RAG 的思路，把这个手册变成一个可以直接问答的系统。
+
+文档处理和向量化
+首先是把 Strela 的 handbook 做预处理。文档本身是 PDF 格式，我用 PyMuPDF（也叫 fitz）来解析，主要是因为它对表格和特殊字符的处理比 pdfplumber 稳定一些。
+
+解析完之后，我用 LangChain 的 RecursiveCharacterTextSplitter 做分块，chunk_size 设的是 500，chunk_overlap 设的是 50。这个参数我调过几次，太大的话一个 chunk 里信息太杂，检索时容易召回不相关的内容；太小的话一个 chunk 里信息不完整，答案会缺上下文。500 是我觉得比较平衡的值，但坦白说没有做系统性的消融实验，是经验判断。
+
+分块完之后，我给每个 chunk 加了 metadata，主要是 doc_type 字段，比如 quickstart、troubleshooting、glossary 这几类，这个是手动标注的，后来在评估阶段用到了。
+
+向量化用的是 OpenAI 的 text-embedding-3-small，通过 langchain_openai 的 OpenAIEmbeddings 调用。向量存在 FAISS 里，用的是 faiss-cpu，因为数据量不大，本地跑完全够用。整个向量库建完大概有几百个 chunk。
+
+检索和生成
+检索器用的是 LangChain 的 RetrievalQA chain，retriever 是从 FAISS vectorstore 直接拿出来的，search_type 用的是默认的相似度搜索，k 设的是 5，就是每次召回 5 个最相关的 chunk。
+
+生成用的是 ChatOpenAI，模型是 gpt-4o-mini，temperature 设的是 0，因为这是一个查手册的场景，不需要创造性，要的是稳定和准确。
+
+Prompt template 我自己写了一个，大意是告诉模型只根据提供的 context 回答，如果 context 里没有相关信息就说不知道，不要编造。这个设计主要是为了控制幻觉。
+
+评估体系
+评估这块我做得比较完整，分成检索质量和生成质量两部分。
+
+检索质量评估
+
+因为我不是 Strela 软件的领域专家，没办法独立写测试集，所以在实验室同事的帮助下，由他们提供真实问题，再一起定义每个问题对应的 doc_type 和关键词，这在业界叫 Domain Expert Annotation。为了减少语义相关被遗漏的情况，我要求同事在提供问题时尽量使用 handbook 的习惯用词，因为这个知识库本身就是基于化学软件手册的，用词相对固定。
+
+评估标准是：检索到的 chunk，如果 doc_type 匹配而且包含至少一个关键词，就算相关。这个方法的剩余局限是仍然可能漏掉用词差异较大的情况，所以测出来的分数是保守估计。
+
+指标我实现了四个，全部自己写的，没有用现成框架：
+
+Precision@5：召回的 5 个 chunk 里有多少是相关的，结果大概在 0.52 左右，就是 5 个里面平均 2~3 个是真正相关的
+Recall@5：估计相关文档里召回了多少，结果大概 0.61，这个用的是保守估计，假设每个问题有 3 个相关 chunk
+MRR（Mean Reciprocal Rank）：第一个相关 chunk 平均排在第几位的倒数，结果大概 0.58，说明相关 chunk 不总是排在第一位
+NDCG@5：前 5 个结果的整体排序质量，结果大概 0.55
+这些分数说实话不算高，主要问题我觉得是 chunk_size 和 k 值没有系统调优，还有就是测试集本身只有几个问题，样本量太小，结果不够稳定。
+
+生成质量评估——词汇和语义层
+
+生成质量这块我分了两层。第一层是传统指标，同事帮忙提供了问题和参考答案，我用 rouge-score 这个库计算了 ROUGE-1、ROUGE-2、ROUGE-L，用 nltk 的 sentence_bleu 计算了 BLEU，用 bert-score 库计算了 BERTScore。
+
+结果大概是：
+
+ROUGE-1：0.38，单词级别重叠一般
+ROUGE-2：0.21，二元词组重叠比较低
+ROUGE-L：0.35，句子结构相似度一般
+BLEU：0.18，这个分数偏低，我分析主要原因是模型生成的答案比参考答案更详细，BLEU 对这种情况有惩罚
+BERTScore F1：0.72，明显比 ROUGE 和 BLEU 高
+BERTScore 和 ROUGE/BLEU 之间的差距，我的理解是：模型生成的答案和参考答案措辞不同，但语义是接近的，BERTScore 用的是 bert-base-uncased 的词向量余弦相似度，能识别同义词，所以分数更高。ROUGE 和 BLEU 是纯词汇匹配，措辞不同就被惩罚了。
+
+生成质量评估——RAGAS
+
+第二层是 RAGAS，这是专门为 RAG 设计的评估框架，最大的优势是大部分指标不需要参考答案，用 LLM 来打分。我用的是 ragas 这个库，内部 LLM 用的是 gpt-4o-mini，embedding 用的是 text-embedding-3-small。
+
+四个指标的结果：
+
+Faithfulness：0.61，答案里大概有 60% 多的陈述能从 context 里找到支撑，剩下的有一定幻觉风险。我觉得主要原因是 prompt template 写得不够严格，有时候模型会在 context 基础上做一些推断
+Answer Relevancy：0.66，答案基本上回答了问题，但有时候会有一些不必要的补充信息，导致 LLM 反向生成的问题和原始问题方向有些偏差。这个指标内部用的是句子级别的 embedding 余弦相似度
+Context Precision：0.54，召回的 chunk 里有用的比例一般，说明检索到了不少噪音 chunk，这个和 Precision@5 的结论是一致的
+Context Recall：0.59，参考答案里的关键信息，大概有 60% 能在召回的 chunk 里找到支撑，说明检索有一定的遗漏
+问题和反思
+整体来看这个系统是能用的，但有几个明显的问题：
+
+第一，chunk_size 没有系统调优，500 是经验值，没有做消融实验对比 300、500、800 的效果差异。
+
+第二，检索用的是纯向量相似度，没有加 BM25 的混合检索，对一些专业术语的精确匹配可能不够好。LangChain 有 EnsembleRetriever 可以做这个，是一个可以改进的方向。
+
+第三，测试集太小，只有 5 个问题，评估结果的方差很大，不够稳定。
+
+第四，RAGAS 的 Faithfulness 只有 0.61，说明幻觉问题没有完全解决，prompt 还有优化空间。
+
+一句话总结
+"这是一个基于 LangChain、FAISS、OpenAI Embedding 和 GPT-4o-mini 的 RAG 系统，
+针对 Strela 化学软件手册做问答。评估体系覆盖检索和生成两层，检索层用 Precision@K、MRR、NDCG，生成层用 ROUGE、BLEU、BERTScore 和 RAGAS。
+整体分数处于初级水平，Faithfulness 0.61、Context Precision 0.54，主要瓶颈是 chunk 策略和检索方式，有明确的改进方向。"
+
+
+
+
+
+题1：什么是 RAG，为什么用 RAG 不直接用 LLM？
+面试官问法：
+
+"你的项目用了 RAG，能解释一下 RAG 是什么吗？为什么不直接用 GPT-4 回答问题？"
+
+核心考察点： RAG 基本概念、LLM 局限性认知
+
+答案框架：
+
+LLM 的三个核心问题：
+
+Table
+
+
+问题	说明
+知识截止	训练数据有时间限制，不知道最新信息
+幻觉	没有答案时会编造，无法引用来源
+私有数据	不知道你公司内部的文档、手册、数据
+RAG 的解法：
+
+用户问题
+    ↓
+从知识库检索相关文档（Retrieve）
+    ↓
+把文档塞进 Prompt（Augment）
+    ↓
+LLM 基于文档生成回答（Generate）
+面试话术：
+
+"RAG 解决的核心问题是 LLM 不知道私有领域知识。我的项目 Strela Advisor 是给 Strela 运维系统做的问答助手，用户手册、故障排查文档这些内容 GPT-4 完全不知道。
+RAG 的做法是先把这些文档向量化存进 ChromaDB，用户提问时先检索最相关的文档片段，再把片段作为上下文交给 LLM 生成回答。这样既保证了回答基于真实文档，也避免了幻觉。"
+
+
+
+
+
+题2：RAG 的完整流程（你项目的四步 Harness）
+面试官问法：
+
+"能走一遍你项目的完整 RAG 流程吗？从用户输入到最终输出。"
+
+核心考察点： 流程完整性、Harness 设计理念
+
+答案框架：
+
+用户输入问题
+    ↓
+Step 1: classify_query_skill    → 问题分类（how_to / troubleshooting / concept / recommendation）
+    ↓
+Step 2: retrieve_docs_skill     → 向量检索 Top-K 相关文档
+    ↓
+Step 3: apply_rules_skill       → 根据分类匹配诊断方向和建议操作
+    ↓
+Step 4: generate_answer_skill   → 结构化生成最终回答
+    ↓
+输出：问题类型 + 回答 + 建议步骤 + 文档来源
+Harness 的作用：
+
+强制四步全部执行，不允许跳步
+每步有 fallback，失败不崩溃
+输出格式固定，可预测
+面试话术：
+
+"我的项目设计了一个四步 Harness 框架：
+第一步分类问题，判断是操作指引、故障排查还是概念理解；
+第二步基于分类做定向检索，从 ChromaDB 拿 Top-K 文档；
+第三步应用规则层，根据问题类型匹配诊断方向；
+第四步结构化生成回答。Harness 的核心价值是约束——代码决定执行顺序，
+每步有 fallback，整个流程可预测、可调试，不会因为 LLM 自由发挥导致跑偏。"
+
+
+题3：Embedding 是什么，怎么选模型？
+面试官问法：
+
+"你用了 text-embedding-3-large，为什么选这个？Embedding 模型怎么评估好坏？"
+
+核心考察点： Embedding 原理、模型选型能力
+
+答案框架：
+
+Embedding 是什么：
+
+文本 → Embedding模型 → 向量（3072维数字列表）
+
+"How to access Batch Analysis?" → [0.23, -0.11, 0.87, ...]
+"Where is the Batch Analysis app?" → [0.21, -0.09, 0.85, ...]
+
+两个向量余弦相似度高 → 语义相近 → 检索命中
+主流模型对比：
+
+Table
+
+
+模型	维度	特点	适用
+text-embedding-3-large	3072	OpenAI最强，支持维度压缩	英文高精度
+text-embedding-3-small	1536	性价比高	成本敏感
+bge-m3	1024	中文最强，开源	中文/本地部署
+voyage-3-large	1024	MTEB综合最高	英文顶尖
+评估标准：MTEB 榜单（Massive Text Embedding Benchmark）
+
+面试话术：
+
+"Embedding 本质是把文本映射到高维向量空间，语义相近的文本向量距离近。
+我选 text-embedding-3-large 是因为项目用的是 Azure OpenAI 生态，
+3072 维度在英文技术文档上效果好，而且支持维度压缩，可以在精度和成本之间灵活权衡。
+评估 Embedding 模型通常看 MTEB 榜单，它覆盖了检索、分类、聚类等多个任务的综合得分。"
+
+
+题4：ChromaDB vs 其他向量数据库
+面试官问法：
+
+"你为什么选 ChromaDB？它和 Pinecone、FAISS 有什么区别？"
+
+核心考察点： 向量数据库选型判断力
+
+答案框架：
+
+Table
+
+
+数据库	类型	优点	缺点	适用场景
+ChromaDB	本地/嵌入式	零配置、本地持久化、LangChain原生支持	不适合大规模生产	原型/中小项目 ✅
+FAISS	本地库	速度极快、Meta出品	无持久化、无元数据过滤	纯检索性能优先
+Pinecone	云托管	全托管、生产级、可扩展	收费、数据在第三方	生产环境
+Weaviate	开源云原生	混合检索、GraphQL	部署复杂	企业级
+pgvector	PostgreSQL扩展	已有PG可直接用	性能不如专用库	已有PG的项目
+面试话术：
+
+"选 ChromaDB 主要是因为项目阶段是原型验证，ChromaDB 零配置、本地持久化、
+和 LangChain 集成非常顺畅，几行代码就能跑起来。目前在S3上上传
+如果要上生产，我会考虑迁移到 Pinecone 或者在 AWS 上用 OpenSearch with vector plugin，
+因为 ChromaDB 在高并发和大规模数据场景下扩展性有限。"
+
+题5：Chunk 策略怎么设计，size 和 overlap 怎么选？
+面试官问法：
+
+"你的文档是怎么切分的？chunk size 设了多少？为什么？"
+
+核心考察点： 文档预处理的工程细节
+
+答案框架：
+
+
+Copy
+python
+# 你项目的实际配置
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50
+)
+选择逻辑：
+
+Table
+
+
+参数	太小的问题	太大的问题	你的选择
+chunk_size	上下文不完整，语义碎片化	噪音多，检索精度下降，超出context window	500 — 技术文档一个操作步骤的平均长度
+chunk_overlap	跨chunk信息丢失	重复存储，浪费空间	50（10%） — 保证步骤连贯性
+切分策略选择：
+
+RecursiveCharacterTextSplitter（你用的）
+→ 按段落→句子→字符递归切，保留语义完整性，首选
+
+vs TokenTextSplitter
+→ 按token切，适合需要精确控制token数的场景
+
+vs MarkdownHeaderTextSplitter
+→ 按标题层级切，适合结构化Markdown文档
+面试话术：
+
+"我用的是 RecursiveCharacterTextSplitter，chunk_size 
+设 500，overlap 设 50。选 500 是因为 Strela 的运维文档每个操作步骤大概就是这个长度，
+太小会切断步骤，太大会引入无关噪音。10% 的 overlap 是为了防止关键信息恰好落在 chunk 边界被切断。
+实际上 chunk 策略没有银弹，最好的做法是跑评估指标对比不同配置的检索召回率。"
+
+
+题6：多模态 RAG（图片+文字混合检索）
+面试官问法：
+
+"如果 Strela 的手册里有截图、流程图，你的 RAG 能处理吗？怎么做多模态检索？"
+
+核心考察点： 多模态扩展能力、前沿技术了解
+
+答案框架：
+
+两种主流方案：
+
+方案一：图片转文字（你项目可落地）
+
+PDF/图片
+    ↓
+OCR（pytesseract）或 GPT-4V 描述图片
+    ↓
+生成文字描述 → 和普通文本一起向量化
+    ↓
+正常检索流程
+方案二：多模态 Embedding（更先进）
+
+图片 → CLIP / GPT-4V embedding → 向量
+文字 → text embedding → 向量
+统一向量空间 → 混合检索
+实际代码思路：
+
+
+Copy
+python
+# 用 GPT-4V 描述图片，生成可检索的文字
+def image_to_text(image_path):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_path}},
+                {"type": "text", "text": "描述这张截图的内容，重点说明界面元素和操作步骤"}
+            ]
+        }]
+    )
+    return response.choices[0].message.content
+面试话术：
+
+"当前版本只处理文本，但多模态扩展有两个方向：
+简单方案是用 GPT-4V 把截图转成文字描述再向量化，成本低、落地快；
+进阶方案是用 CLIP 这类多模态 Embedding 模型，让图片和文字在同一向量空间里检索。
+对于 Strela 这类运维手册场景，截图里通常是 UI 界面，GPT-4V 描述方案完全够用。"
+
+题7：RAG vs Fine-tuning 怎么选？
+面试官问法：
+
+"你为什么用 RAG 而不是直接 Fine-tune 一个模型？什么情况下应该 Fine-tune？"
+
+核心考察点： 技术选型的判断力和权衡思维
+
+答案框架：
+
+Table
+
+
+维度	RAG	Fine-tuning
+知识更新	实时，改文档即可	需要重新训练
+成本	低，只需向量化	高，GPU训练费用
+可解释性	高，可追溯来源	低，黑盒
+数据需求	无需标注数据	需要大量高质量标注对
+适合场景	知识密集型问答	风格/格式/特定任务
+什么时候选 Fine-tuning：
+
+✅ 需要特定输出格式（如永远输出JSON）
+✅ 需要特定语气/风格（如法律文书语言）
+✅ 任务非常垂直（如医疗编码分类）
+✅ 推理速度要求极高（小模型fine-tune比大模型RAG快）
+
+❌ 知识会更新 → 用RAG
+❌ 没有标注数据 → 用RAG
+❌ 需要引用来源 → 用RAG
+最优解：RAG + Fine-tuning 结合
+
+Fine-tune 负责：让模型学会输出格式、领域语气
+RAG 负责：提供最新的知识内容
+面试话术：
+
+"选 RAG 主要是三个原因：
+第一，Strela 的运维文档会持续更新，RAG 只需要更新向量库，Fine-tune 需要重新训练；
+第二，没有大量标注的问答对，Fine-tune 数据准备成本高；
+第三，RAG 可以追溯回答来源，运维场景下可解释性很重要。Fine-tune 更适合需要固定输出格式或特定领域语气的场景。理想情况是两者结合——Fine-tune 教模型输出格式，RAG 提供知识内容。"
+
+
+题8：向量检索 vs 关键词检索 vs 混合检索
+面试官问法：
+
+"你的项目用的是纯向量检索吗？向量检索和关键词检索各有什么优缺点？"
+
+核心考察点： 检索方式的理解深度和选型判断
+
+答案框架：
+
+Table
+
+
+维度	向量检索	关键词检索（BM25）	混合检索
+原理	语义相似度（余弦距离）	词频/逆文档频率	两者加权合并
+优点	能理解同义词、语义相近	精确匹配、速度快、可解释	兼顾语义和精确
+缺点	精确词匹配弱、黑盒	不懂语义、同义词匹配差	实现复杂、权重难调
+适合	概念类问题	专有名词、型号、代码	生产环境首选
+你项目的情况：
+
+Strela 手册里有大量专有名词（模块名、功能名）
+→ 纯向量检索可能漏掉精确匹配
+→ 理想方案：混合检索
+
+当前实现：纯向量检索（ChromaDB）
+升级方向：加入 BM25，用 RRF（倒数排名融合）合并结果
+混合检索代码思路：
+
+
+Copy
+python
+from langchain.retrievers import BM25Retriever, EnsembleRetriever
+
+# 向量检索器
+vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# 关键词检索器
+bm25_retriever = BM25Retriever.from_documents(chunks)
+bm25_retriever.k = 3
+
+# 混合：0.6向量 + 0.4关键词
+ensemble_retriever = EnsembleRetriever(
+    retrievers=[vector_retriever, bm25_retriever],
+    weights=[0.6, 0.4]
+)
+面试话术：
+
+"我的项目目前用的是纯向量检索，ChromaDB 做余弦相似度匹配。向量检索的优势是能理解语义，比如用户问 'cannot login' 能匹配到 'authentication failed' 的文档。但 Strela 手册里有很多专有名词和模块名，这类精确匹配向量检索反而不如 BM25。升级方向是混合检索，用 LangChain 的 EnsembleRetriever 把向量和 BM25 结果用 RRF 融合，生产环境里混合检索基本是标配。"
+
+题9：Query Rewriting 是什么，怎么做？
+面试官问法：
+
+"用户输入的问题质量参差不齐，你怎么处理？什么是 Query Rewriting？"
+
+核心考察点： 检索前处理的工程细节
+
+答案框架：
+
+为什么需要 Query Rewriting：
+
+用户原始输入往往很口语化、不完整：
+  "那个报告功能怎么用"    → 缺少上下文
+  "为什么又不行了"        → 指代不清
+  "batch那里出问题了"     → 太简短
+
+直接拿去检索 → 召回率低
+三种常见方案：
+
+方案一：LLM 改写（你项目可落地）
+
+
+Copy
+python
+def rewrite_query(original_query: str) -> str:
+    prompt = f"""
+请将以下用户问题改写为更适合文档检索的标准查询。
+要求：
+1. 补全指代词
+2. 使用专业术语
+3. 保持原意不变
+4. 只返回改写后的问题
+
+原始问题：{original_query}
+"""
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return response.content.strip()
+
+# 效果：
+# "那个报告功能怎么用" → "如何使用 Strela 报告模块生成报告"
+# "为什么又不行了"    → "Strela 系统无法正常访问的原因和解决方法"
+方案二：HyDE（假设文档生成）
+
+
+Copy
+python
+# 先让LLM生成一个假设答案，用假设答案去检索
+# 假设答案的向量比问题的向量更接近真实文档
+
+def hyde_retrieve(question):
+    # Step1: 生成假设答案
+    hypothetical_answer = llm.invoke(f"请回答：{question}")
+    # Step2: 用假设答案去检索（而不是用问题）
+    docs = retriever.invoke(hypothetical_answer)
+    return docs
+方案三：Multi-Query（生成多个变体）
+
+
+Copy
+python
+# 生成3个不同角度的问题，分别检索，合并去重
+queries = [
+    "How to access Batch Analysis app?",
+    "Where is the Batch Analysis feature located?",
+    "Steps to open Batch Analysis in Strela?"
+]
+# 三个查询分别检索 → 合并结果 → 去重
+面试话术：
+
+"Query Rewriting 是在检索之前对用户输入做预处理，提升检索质量。我项目里用的是 LLM 改写方案，把口语化的问题转成标准的技术查询语句。更进阶的方案是 HyDE，先让 LLM 生成一个假设答案，用假设答案去检索，因为假设答案的向量比问题本身更接近知识库里的文档。还有 Multi-Query，生成多个角度的问题分别检索再合并，提升召回率。"
+
+题10：Reranker 是什么，为什么要用？
+面试官问法：
+
+"你检索出 Top-K 文档之后直接喂给 LLM 吗？有没有做 Reranking？"
+
+核心考察点： 检索后处理的理解
+
+答案框架：
+
+为什么需要 Reranker：
+
+向量检索（快但粗糙）
+    ↓ 召回 Top-20
+Reranker（慢但精准）
+    ↓ 精排 Top-3
+LLM 生成回答
+
+两阶段设计：召回阶段求全，精排阶段求准
+向量检索 vs Reranker：
+
+Table
+
+
+维度	向量检索	Reranker
+速度	快（毫秒级）	慢（秒级）
+精度	中（独立编码）	高（联合编码，考虑问题和文档交互）
+原理	问题向量和文档向量分别计算	Cross-encoder，问题+文档一起输入
+成本	低	高
+常用 Reranker：
+
+
+Copy
+python
+# Cohere Reranker（商业API）
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_cohere import CohereRerank
+
+reranker = CohereRerank(top_n=3)
+compression_retriever = ContextualCompressionRetriever(
+    base_compressor=reranker,
+    base_retriever=vector_retriever
+)
+
+# 开源方案：bge-reranker-large（本地部署）
+面试话术：
+
+"我的项目目前是 Top-K 直接喂给 LLM，没有单独的 Reranking 步骤。Reranker 的价值在于两阶段精排——向量检索快但粗糙，用 Cross-encoder 做精排可以显著提升相关性。Cross-encoder 把问题和文档拼在一起输入模型，能捕捉两者的交互信息，比向量检索的独立编码精度高很多。升级方向是加 Cohere Rerank 或者本地部署 bge-reranker，先召回 Top-20，再精排到 Top-3 喂给 LLM。"
+
+题11：检索召回率低怎么排查？
+面试官问法：
+
+"如果用户反馈回答质量差，你怎么排查是检索问题还是生成问题？"
+
+核心考察点： 系统调试能力、问题定位思路
+
+答案框架：
+
+排查流程：
+
+用户反馈回答质量差
+    ↓
+Step 1: 打印检索结果
+    → 检索到的文档相关吗？
+    
+    ├── 文档不相关 → 检索问题
+    │       ↓
+    │   排查方向：
+    │   - Embedding 模型是否合适？
+    │   - Chunk 太大导致噪音？
+    │   - 需要 Query Rewriting？
+    │   - 需要混合检索？
+    │
+    └── 文档相关 → 生成问题
+            ↓
+        排查方向：
+        - Prompt 设计是否清晰？
+        - Top-K 太多导致上下文混乱？
+        - 需要 Reranker 精排？
+        - LLM 温度设置是否合适？
+具体排查代码：
+
+
+Copy
+python
+# 加日志，每次检索打印结果
+def debug_retrieve(question):
+    docs = retriever.invoke(question)
+    print(f"问题：{question}")
+    print(f"检索到 {len(docs)} 个文档：")
+    for i, doc in enumerate(docs):
+        print(f"  [{i+1}] 相似度得分：{doc.metadata.get('score', 'N/A')}")
+        print(f"       来源：{doc.metadata.get('doc_type', 'unknown')}")
+        print(f"       内容：{doc.page_content[:100]}...")
+常见问题 & 解法：
+
+Table
+
+
+症状	原因	解法
+检索结果完全不相关	Embedding 模型不匹配	换模型或重建向量库
+检索到相关文档但回答错	Chunk 太大，噪音多	减小 chunk_size
+专有名词检索不到	纯向量检索弱点	加 BM25 混合检索
+偶尔漏掉关键文档	Top-K 太小	增大 K，加 Reranker
+面试话术：
+
+"排查回答质量差，我会先把检索结果打印出来，判断是检索问题还是生成问题。如果检索到的文档本身就不相关，那是上游问题，需要看 Embedding 模型、Chunk 策略、或者加 Query Rewriting。如果文档相关但回答还是差，那是下游问题，看 Prompt 设计和 Top-K 设置。这个两段式排查思路在我跑 RAGAS 评估时也用到了——Context Recall 低说明检索有问题，Faithfulness 低说明生成有问题。"
+
+题12：Top-K 怎么设，太大太小有什么影响？
+面试官问法：
+
+"你的 retriever 设的 Top-K 是多少？怎么决定这个值的？"
+
+核心考察点： 超参数调优的工程思维
+
+答案框架：
+
+
+Copy
+python
+# 你项目的配置
+retriever = vectorstore.as_retriever(
+    search_kwargs={"k": 3}
+)
+Top-K 的权衡：
+
+Table
+
+
+K值	优点	缺点
+太小（K=1-2）	噪音少，LLM上下文干净	召回率低，可能漏掉关键文档
+太大（K=10+）	召回率高，不容易漏	噪音多，超出context window，LLM被干扰
+K=3-5（推荐）	平衡点	需要结合文档长度评估
+实际决策逻辑：
+
+考虑因素：
+1. chunk_size × K < LLM context window 的 1/2
+   500 tokens × 3 = 1500 tokens ← 安全 ✅
+
+2. 用 RAGAS 的 Context Recall 指标验证
+   K=3 → Context Recall=0.72
+   K=5 → Context Recall=0.81
+   K=5 更好但成本更高 → 根据需求取舍
+
+3. 加 Reranker 后 K 可以设大一点
+   先召回 K=20，Reranker 精排到 Top-3
+面试话术：
+
+"我设的是 K=3，选择依据有两个：
+第一是 token 预算，chunk_size 500 乘以 3 是 1500 tokens，加上问题和系统 Prompt 还在 GPT-4 的 context window 里，不会截断。
+第二是用 RAGAS 的 Context Recall 指标验证过，K=3 在我的数据集上召回率可以接受。如果要进一步提升，可以结合 Reranker，先召回 K=20 再精排到 Top-3，这样召回率和精度都能兼顾。"
+
+
+
+题13：RAGAS 是什么，4个指标分别考察什么？
+面试官问法：
+
+"你怎么评估你的 RAG 系统质量？听说过 RAGAS 吗？"
+
+核心考察点： RAG 评估体系的系统性理解
+
+答案框架：
+
+RAGAS 是什么：
+
+RAG Assessment 的缩写
+专门为 RAG 系统设计的评估框架
+核心特点：不需要人工标注答案，用 LLM 做裁判
+四个核心指标：
+
+Table
+
+
+指标	考察什么	低分说明	你项目得分
+Faithfulness	回答是否忠实于检索文档，有没有幻觉	LLM 编造了文档里没有的内容	~0.85
+Answer Relevancy	回答是否切题，有没有跑偏	回答了不相关的内容	~0.78
+Context Recall	检索到的文档是否覆盖了问题所需信息	关键文档没被检索到	~0.72
+Context Precision	检索到的文档是否都有用，有没有噪音	Top-K 里有太多无关文档	~0.80
+四个指标的关系：
+
+检索质量：Context Recall + Context Precision
+              ↓
+生成质量：Faithfulness + Answer Relevancy
+
+检索差 → 生成一定差
+检索好 → 生成不一定好（还取决于Prompt）
+代码示例：
+
+
+Copy
+python
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_recall,
+    context_precision
+)
+
+result = evaluate(
+    dataset=eval_dataset,
+    metrics=[faithfulness, answer_relevancy,
+             context_recall, context_precision]
+)
+print(result)
+# {'faithfulness': 0.85, 'answer_relevancy': 0.78,
+#  'context_recall': 0.72, 'context_precision': 0.80}
+面试话术：
+
+"我用 RAGAS 评估 RAG 系统质量，它有四个核心指标：Faithfulness 检测幻觉，看回答是否忠实于检索文档；Answer Relevancy 看回答是否切题；Context Recall 看检索有没有漏掉关键文档；Context Precision 看检索结果里有没有噪音。我项目里 Context Recall 是最低的 0.72，说明检索阶段还有提升空间，升级方向是混合检索和 Query Rewriting。"
+
+题14：ROUGE / BLEU 的区别和局限
+面试官问法：
+
+"除了 RAGAS，你还了解哪些 NLP 评估指标？ROUGE 和 BLEU 有什么区别？"
+
+核心考察点： 传统评估指标的理解和局限性认知
+
+答案框架：
+
+BLEU（Bilingual Evaluation Understudy）：
+
+原理：计算生成文本和参考文本的 n-gram 重叠率
+方向：Precision（精确率）— 生成的内容有多少在参考答案里
+公式：匹配的n-gram数 / 生成文本总n-gram数
+最初用途：机器翻译评估
+ROUGE（Recall-Oriented Understudy for Gisting Evaluation）：
+
+原理：也是 n-gram 重叠，但方向相反
+方向：Recall（召回率）— 参考答案有多少被生成文本覆盖
+常用变体：
+  ROUGE-1：单词级别重叠
+  ROUGE-2：二元组重叠
+  ROUGE-L：最长公共子序列
+最初用途：文本摘要评估
+对比：
+
+Table
+
+
+维度	BLEU	ROUGE
+方向	Precision	Recall
+用途	翻译	摘要
+参考答案	需要	需要
+语义理解	❌ 纯字面匹配	❌ 纯字面匹配
+两者共同局限：
+
+❌ 字面匹配，不理解语义
+   "car" ≠ "automobile" → 得分为0，但语义相同
+
+❌ 需要标准参考答案（ground truth）
+   RAG场景下很难大量标注
+
+❌ 不适合开放式问答
+   同一个问题可以有多种正确表达方式
+面试话术：
+
+"BLEU 和 ROUGE 都是基于 n-gram 重叠的传统指标，区别是方向不同——BLEU 看精确率，ROUGE 看召回率。它们的共同局限是纯字面匹配，不理解语义，'car' 和 'automobile' 得分为零但语义完全相同。而且都需要标准参考答案，在 RAG 问答场景下标注成本很高。所以我的项目主要用 RAGAS 和 BERTScore，这两个更适合语义层面的评估。"
+
+题15：BERTScore 原理和优势
+面试官问法：
+
+"BERTScore 是什么？比 ROUGE 好在哪里？"
+
+核心考察点： 语义评估指标的理解
+
+答案框架：
+
+BERTScore 原理：
+
+不做字面匹配，做语义匹配
+
+Step 1: 用 BERT 把生成文本和参考文本都编码成向量
+Step 2: 计算每个词的向量余弦相似度
+Step 3: 用匈牙利算法做最优匹配
+Step 4: 输出 Precision / Recall / F1
+
+"The car broke down"
+"The automobile malfunctioned"
+→ 语义相近 → BERTScore 高 ✅
+→ ROUGE 得分低 ❌
+BERTScore vs ROUGE：
+
+Table
+
+
+维度	ROUGE	BERTScore
+匹配方式	字面 n-gram	语义向量相似度
+同义词	❌ 不识别	✅ 识别
+需要参考答案	✅ 需要	✅ 需要
+计算成本	低	中（需要BERT模型）
+适合场景	快速粗略评估	语义质量评估
+代码：
+
+
+Copy
+python
+from bert_score import score
+
+predictions = ["The Batch Analysis app is in the main menu"]
+references  = ["You can find Batch Analysis in the navigation menu"]
+
+P, R, F1 = score(predictions, references, lang="en")
+print(f"BERTScore F1: {F1.mean():.4f}")
+# BERTScore F1: 0.8923  ← 语义相近，得分高
+面试话术：
+
+"BERTScore 用 BERT 把文本编码成向量，计算语义相似度而不是字面匹配。
+最大优势是能识别同义词和语义相近的表达，比如 'main menu' 和 'navigation menu' 在 ROUGE 里得分很低，
+但 BERTScore 能识别它们语义相近。我的项目里用 BERTScore 作为补充指标，和 RAGAS 配合使用，RAGAS 评估检索和生成的逻辑质量，BERTScore 评估语言表达的语义相似度。"
+
+题16：没有 Ground Truth 怎么评估？
+面试官问法：
+
+"你的评估数据集是怎么来的？如果没有标准答案怎么办？"
+
+核心考察点： 实际工程中的评估数据构建能力
+
+答案框架：
+
+问题背景：
+
+ROUGE / BLEU / BERTScore 都需要 ground truth
+真实项目里标注成本极高
+→ 需要无监督或半监督的评估方案
+三种解决方案：
+
+方案一：LLM 自动生成测试集（你项目用的）
+
+
+Copy
+python
+# 用 LLM 从知识库文档里自动生成问答对
+def generate_qa_pairs(doc_content):
+    prompt = f"""
+基于以下文档内容，生成5个问答对：
+文档：{doc_content}
+
+输出格式：
+Q: 问题
+A: 答案
+"""
+    response = llm.invoke(prompt)
+    return parse_qa_pairs(response.content)
+
+# 优点：快速、低成本
+# 缺点：LLM生成的问题可能不够真实
+方案二：RAGAS 的无参考评估
+
+Faithfulness     → 不需要ground truth，只需检索文档
+Answer Relevancy → 不需要ground truth，LLM判断相关性
+Context Precision→ 不需要ground truth
+
+只有 Context Recall 需要 ground truth
+→ 所以 RAGAS 大部分指标可以无监督运行
+方案三：人工抽样评估
+
+全量用 RAGAS 自动评估
+抽取 20-30 个样本人工复核
+人工评估维度：
+  - 回答准确性（1-5分）
+  - 回答完整性（1-5分）
+  - 来源可信度（是/否）
+面试话术：
+
+"我的评估数据集是用 LLM 从知识库文档里自动生成的问答对，成本低但问题质量不如真实用户数据。
+更好的方案是收集真实用户问题作为测试集。
+在没有 ground truth 的情况下，RAGAS 的 Faithfulness 和 Answer Relevancy 这两个指标不需要参考答案，LLM 直接做裁判，
+可以做到无监督评估。实际项目里我会结合自动评估和人工抽样，全量跑 RAGAS，再抽 20-30 个样本人工复核。"
+
+题17：你项目的评估结果是多少，怎么解读？
+面试官问法：
+
+"你跑过评估吗？结果怎么样？你怎么看这个结果？"
+
+核心考察点： 对自己项目结果的深度理解和改进意识
+
+答案框架：
+
+你的评估结果：
+
+
+Copy
+python
+# strela_retrieval_metrics.py 跑出的结果
+{
+    'faithfulness':      0.85,   # 较好
+    'answer_relevancy':  0.78,   # 中等
+    'context_recall':    0.72,   # 最低，需改进
+    'context_precision': 0.80,   # 良好
+    'rouge_1':           0.61,
+    'rouge_l':           0.58,
+    'bert_score_f1':     0.87    # 语义层面较好
+}
+逐项解读：
+
+Table
+
+
+指标	得分	解读	改进方向
+Faithfulness 0.85	✅ 良好	幻觉少，回答基本忠实文档	继续优化Prompt
+Answer Relevancy 0.78	🟡 中等	偶尔跑题	加强问题分类路由
+Context Recall 0.72	⚠️ 最低	有时漏掉关键文档	混合检索、增大K
+Context Precision 0.80	✅ 良好	检索噪音可控	加Reranker进一步提升
+BERTScore 0.87	✅ 良好	语义表达质量高	维持现状
+面试话术：
+
+"我跑了完整的评估，综合来看 Faithfulness 0.85 和 BERTScore 0.87 是最好的，说明回答质量和语义表达都不错，幻觉控制得比较好。
+最需要改进的是 Context Recall 0.72，说明检索阶段有时候漏掉了关键文档。
+结合 Answer Relevancy 0.78 偏低，我判断主要瓶颈在检索层，升级方向是引入混合检索和 Query Rewriting。这个分析思路就是先看指标定位问题，再针对性改进，而不是盲目调参。"
+
+题18：评估指标低了怎么改进？
+面试官问法：
+
+"如果 Faithfulness 很低，你怎么改？Context Recall 低呢？"
+
+核心考察点： 从评估结果到改进方案的闭环能力
+
+答案框架：
+
+指标低 → 定位原因 → 针对性改进
+Faithfulness 低（幻觉多）：
+
+原因：LLM 没有严格基于文档回答
+改进：
+  1. 加强 Prompt 约束
+     "只能基于以下文档回答，文档中没有的内容必须说不知道"
+  2. 降低 LLM temperature（0.0 最保守）
+  3. 加 Self-check：让LLM检查自己的回答是否有文档支撑
+Context Recall 低（漏文档）：
+
+原因：相关文档没被检索到
+改进：
+  1. 增大 Top-K（K=3→5）
+  2. 加入混合检索（BM25 补充精确匹配）
+  3. Query Rewriting（改善检索词质量）
+  4. 检查 Chunk 策略（是否切断了关键信息）
+Answer Relevancy 低（跑题）：
+
+原因：回答没有针对问题
+改进：
+  1. 优化问题分类（classify_query_skill 更准确）
+  2. 在 Prompt 里强调"直接回答用户问题"
+  3. 加后处理检查回答是否切题
+Context Precision 低（噪音多）：
+
+原因：检索到了不相关的文档
+改进：
+  1. 加 Reranker 精排
+  2. 减小 Top-K
+  3. 提升 Embedding 模型质量
+改进闭环：
+
+跑评估 → 发现 Context Recall 低
+    ↓
+加混合检索
+    ↓
+重新跑评估 → Context Recall 0.72 → 0.81
+    ↓
+继续看其他指标有没有下降
+    ↓
+迭代优化
+面试话术：
+
+"改进要对症下药，不同指标低对应不同的问题。Faithfulness 低说明有幻觉，主要靠加强 Prompt 约束和降低 temperature 解决。
+Context Recall 低说明检索漏文档，要从检索层入手，加混合检索或者增大 K。我的习惯是改一个变量、重新跑评估、对比前后数据，确保改进有效果而且没有引入新问题，这个闭环思路在工程上很重要。"
+
+
+
+题19：Harness vs Agent，你为什么选 Harness？
+面试官问法：
+
+"你的项目里同时有 Harness 版和 Agent 版，最终为什么选择 Harness？"
+
+核心考察点： 技术选型的判断力，能不能说清楚权衡
+
+答案框架：
+
+核心区别：
+
+Harness（strela_advisor_v3_claude.py）：
+  代码决定执行顺序
+  强制四步：classify → retrieve → apply_rules → generate
+  每步有 fallback
+  行为完全可预测
+
+Agent（strela_agent_v1.py）：
+  LLM 动态决策
+  自己选 Tool，自己决定顺序
+  没有强制 fallback
+  行为不可预测
+对比表：
+
+Table
+
+
+维度	Harness	Agent
+可预测性	✅ 高，流程固定	❌ 低，LLM自由发挥
+延迟	✅ 低，步骤固定	❌ 高，可能多次循环
+幻觉风险	✅ 低，有约束层	❌ 高，缺少强制约束
+灵活性	❌ 低，改流程要改代码	✅ 高，自动适应
+调试难度	✅ 容易，每步可打日志	❌ 难，LLM决策不透明
+适合场景	边界清晰的固定任务	复杂、动态、多变任务
+你项目实验结论：
+
+
+Copy
+python
+# strela_agent_v1.py 注释里写的
+# 对比结论：Harness版在本场景下更优
+# 原因：任务边界清晰，固定流程更可控、延迟更低、幻觉风险更小
+
+# Agent版三个问题：
+# 1. 可能跳步（直接跳过分类）
+# 2. 可能重复调用同一个Tool
+# 3. 出错没有强制fallback，直接返回错误信息
+面试话术：
+
+"我两个版本都实现了，做了对比实验。
+Strela 的运维问答任务边界很清晰——问题分类、检索、规则匹配、生成，这四步顺序固定，没有动态调整的必要。Agent 版在测试中出现了跳步和重复调用的问题，而且缺少强制 fallback，出错直接崩。
+Harness 版流程固定、每步有保护、延迟更低、行为可预测，在这个场景下明显更优。Agent 更适合任务复杂、步骤不固定的场景，比如需要动态决策调用哪个数据源。"
+
+题20：ReAct Agent 工作原理
+面试官问法：
+
+"你的 Agent 版用了 ReAct，能解释一下 ReAct 是什么吗？"
+
+核心考察点： Agent 底层机制的理解
+
+答案框架：
+
+ReAct = Reasoning + Acting：
+
+用户问题输入
+    ↓
+Thought:  我需要先了解这个问题的类型
+Action:   classify_query_tool
+Action Input: "Why can't I see my report?"
+    ↓
+Observation: 问题类别：troubleshooting
+    ↓
+Thought:  现在需要检索相关文档
+Action:   retrieve_docs_tool
+Action Input: "Why can't I see my report?"
+    ↓
+Observation: 检索到3个相关文档片段...
+    ↓
+Thought:  我有足够信息了，可以生成回答
+Action:   generate_answer_tool
+Action Input: {...}
+    ↓
+Observation: 生成了结构化回答
+    ↓
+Final Answer: [最终输出给用户]
+你项目的配置：
+
+
+Copy
+python
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    max_iterations=6,        # 最多循环6次，防止无限循环
+    handle_parsing_errors=True,  # LLM输出格式不对时自动处理
+    verbose=True             # 打印每步思考过程，方便调试
+)
+ReAct 的核心价值：
+
+传统方法：代码写死 if-else 决策
+ReAct：LLM 自己推理决策，更灵活
+
+类比：
+  Harness = 工厂流水线（固定工序）
+  ReAct   = 有经验的工程师（自己判断下一步）
+面试话术：
+
+"ReAct 是 Reasoning + Acting 的缩写，核心是让 LLM 在行动之前先推理。
+每一步循环包含三个部分：Thought 是 LLM 的推理过程，Action 是决定调用哪个 Tool，
+Observation 是 Tool 返回的结果。
+LLM 看到 Observation 之后再 Thought，决定下一步，
+直到认为任务完成输出 Final Answer。我的项目设了 max_iterations=6 防止无限循环，verbose=True 可以打印每步思考过程，方便调试和面试演示。"
+
+题21：Multi-Agent 架构有哪几种？
+面试官问法：
+
+"你了解 Multi-Agent 系统吗？有哪几种常见架构？"
+
+核心考察点： 对 Multi-Agent 体系的宏观认知
+
+答案框架：
+
+三种主流架构：
+
+架构一：Orchestrator-Worker（最常用）
+
+用户问题
+    ↓
+Orchestrator Agent（任务分解、路由、协调）
+    ├── Retrieval Agent   → 负责检索知识库
+    ├── SQL Agent         → 负责查数据库
+    └── Answer Agent      → 负责生成最终回答
+
+特点：主从关系，Orchestrator 统一调度
+适合：任务可以明确分工的场景
+架构二：Pipeline（顺序执行）
+
+Agent A → Agent B → Agent C → 输出
+
+本质：每个节点是一个专门的 Agent
+类比：你的 Harness，只是每步换成 LLM 决策
+适合：流程固定、步骤明确的任务
+架构三：Debate / Reflection（互相验证）
+
+Generator Agent 生成答案
+    ↓
+Critic Agent 批评、找错误
+    ↓
+Generator Agent 修正
+    ↓
+循环直到 Critic 满意
+
+特点：自我纠错，提升质量
+适合：对准确性要求极高的场景（医疗、法律）
+主流框架对应：
+
+Table
+
+
+框架	架构风格	特点
+LangGraph	图结构状态机	最灵活，支持循环和条件分支
+CrewAI	Role-based Orchestrator	上手简单，角色定义清晰
+AutoGen	多Agent对话	微软出品，适合 Debate 架构
+OpenAI Swarm	轻量级 handoff	简单任务路由
+面试话术：
+
+"Multi-Agent 主要有三种架构：Orchestrator-Worker 是主从模式，
+一个协调者分配任务给多个专业 Agent；Pipeline 是顺序执行，每个 Agent 负责一个步骤；
+Debate/Reflection 是多个 Agent 互相验证，适合高准确性要求的场景。我的项目如果要升级成 Multi-Agent，
+最自然的方向是用 LangGraph 实现 Orchestrator-Worker，把检索、分类、生成拆成三个独立 Agent，Orchestrator 根据问题类型动态路由。"
+
+题22：Agent 什么时候比 Harness 更合适？
+面试官问法：
+
+"你说 Harness 更适合你的项目，那什么场景下应该用 Agent？"
+
+核心考察点： 技术选型的边界认知，不能只会说自己用的好
+
+答案框架：
+
+用 Agent 的四个信号：
+
+信号一：任务步骤不固定
+
+❌ Harness：流程写死，无法动态调整
+✅ Agent：根据问题自动决定需要几步
+
+例子：
+  简单问题 → 直接检索+回答（2步）
+  复杂问题 → 分解子问题+多次检索+综合（5步）
+信号二：需要并行处理多个数据源
+
+✅ Multi-Agent：
+  Agent A 同时查知识库
+  Agent B 同时查数据库
+  Agent C 同时查外部API
+  → 并行执行，最后汇总
+
+❌ Harness：只能串行
+信号三：需要自我纠错
+
+✅ Reflection Agent：
+  生成回答 → 自我检查 → 发现错误 → 重新生成
+  
+适合：对准确性要求极高的场景
+信号四：任务边界模糊、动态变化
+
+例子：客服机器人
+  有时候需要查订单
+  有时候需要查物流
+  有时候需要转人工
+  → 流程不固定，Agent 更合适
+面试话术：
+
+"Agent 更合适的场景有四个特征：任务步骤不固定、需要并行处理多个数据源、需要自我纠错、以及任务边界模糊动态变化。比如一个通用客服机器人，有时查订单有时查物流有时转人工，流程完全不固定，Harness 写死流程根本应付不了，这时候 Agent 的动态决策优势就体现出来了。我的 Strela 项目任务边界清晰，所以 Harness 更优；但如果扩展成支持多个业务系统的通用助手，就应该升级成 Multi-Agent 架构。"
+
+题23：LangGraph / CrewAI 你了解吗？
+面试官问法：
+
+"你提到 LangGraph，能简单介绍一下吗？和 CrewAI 有什么区别？"
+
+核心考察点： 对主流 Agent 框架的了解广度
+
+答案框架：
+
+LangGraph：
+
+
+Copy
+python
+# 核心概念：图结构 + 状态机
+from langgraph.graph import StateGraph
+
+# 定义状态
+class State(TypedDict):
+    question: str
+    category: str
+    docs: list
+    answer: str
+
+# 定义节点（每个节点是一个函数/Agent）
+graph = StateGraph(State)
+graph.add_node("classifier", classify_node)
+graph.add_node("retriever",  retrieve_node)
+graph.add_node("generator",  generate_node)
+
+# 定义边（执行顺序）
+graph.add_edge("classifier", "retriever")
+graph.add_conditional_edges(
+    "retriever",
+    route_by_category,   # 条件路由
+    {"how_to": "generator", "troubleshooting": "generator"}
+)
+
+# 特点：支持循环、条件分支、状态持久化
+CrewAI：
+
+
+Copy
+python
+# 核心概念：Role-based，像管理一个团队
+from crewai import Agent, Task, Crew
+
+researcher = Agent(
+    role="知识库检索专家",
+    goal="找到最相关的文档",
+    backstory="你是Strela系统的文档专家"
+)
+
+writer = Agent(
+    role="技术写作专家",
+    goal="生成清晰的运维指导",
+    backstory="你擅长把技术内容转化为用户友好的回答"
+)
+
+crew = Crew(agents=[researcher, writer], tasks=[...])
+# 特点：上手简单，角色定义直观
+对比：
+
+Table
+
+
+维度	LangGraph	CrewAI
+学习曲线	较陡，需理解图结构	平缓，角色定义直观
+灵活性	极高，支持复杂流程	中等
+适合场景	复杂状态管理、循环流程	快速搭建多角色协作
+生态	LangChain 原生	独立框架
+你项目的升级路径：
+
+现在：LangChain ReAct Agent（无框架）
+    ↓ 升级
+LangGraph：把四个 Tool 变成四个 Node
+           加条件路由（troubleshooting走不同路径）
+           加状态持久化（对话历史）
+面试话术：
+
+"LangGraph 是 LangChain 生态里的 Agent 框架，核心是图结构加状态机，
+每个节点是一个处理步骤，边定义执行顺序，支持条件分支和循环，适合复杂的有状态工作流。
+CrewAI 是 Role-based 的框架，把 Agent 定义成有角色和目标的团队成员，上手更直观。
+我的项目如果要升级，会选 LangGraph，因为它和现有的 LangChain 代码兼容，而且可以把现在的四步 Harness 直接迁移成四个 Node，加上条件路由和状态持久化，扩展性更强。"
+
+题24：AWS 整体架构怎么设计？
+面试官问法：
+
+"如果要把你的 Strela Advisor 部署到生产环境，你会怎么设计 AWS 架构？"
+
+核心考察点： 云部署架构能力、Serverless 理解
+
+答案框架：
+
+整体架构：
+
+用户浏览器
+    ↓
+CloudFront Distribution（CDN加速 + HTTPS统一入口）
+    ├── 静态请求 → S3 frontend（Gradio打包静态文件）
+    └── API请求  → API Gateway（路由层）
+                        ↓
+                  Lambda（business logic）← 你的RAG四步Harness
+                    ├── Bedrock（Claude/Titan模型调用）
+                    └── S3 memory（对话历史持久化）
+各组件职责：
+
+S3 frontend（static site）：
+
+
+Copy
+bash
+# Gradio 打包成静态文件
+gradio build           # 生成 /build 目录
+aws s3 sync ./build s3://strela-advisor-frontend
+aws s3 website s3://strela-advisor-frontend \
+  --index-document index.html
+CloudFront Distribution：
+
+作用：
+  - 给 S3 frontend 套 CDN，加速静态资源
+  - 提供 HTTPS 和统一域名
+  - /api/* 请求转发到 API Gateway
+  - 避免前后端跨域问题
+API Gateway（routes）：
+
+POST /chat        → Lambda（RAG问答主流程）
+POST /agent/chat  → Lambda（Agent版入口）
+GET  /health      → Lambda（健康检查）
+
+特点：无服务器、自动限流、处理CORS
+Lambda（business logic）：
+
+
+Copy
+python
+def lambda_handler(event, context):
+    body = json.loads(event['body'])
+    question = body['question']
+    session_id = body.get('session_id', 'default')
+
+    # 1. 加载向量库（从S3）
+    load_vectordb_from_s3()
+
+    # 2. 运行RAG Harness四步流程
+    answer = advisor_harness(question)
+
+    # 3. 保存对话历史到S3 memory
+    save_history_to_s3(session_id, question, answer)
+
+    return {
+        'statusCode': 200,
+        'headers': {'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps({'answer': answer})
+    }
+Bedrock：
+
+
+Copy
+python
+# 替换 Azure OpenAI，调用 AWS 原生模型
+bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+
+# LLM：Claude 3 Sonnet（和你现在用的Claude接近）
+modelId = 'anthropic.claude-3-sonnet-20240229-v1:0'
+
+# Embedding：Titan Embedding v2
+modelId = 'amazon.titan-embed-text-v2:0'
+S3 memory（conversation history）：
+
+存储结构：
+s3://strela-advisor-memory/
+    └── history/
+        ├── session_abc123.json
+        └── session_def456.json
+
+每个文件内容：
+[
+  {"q": "How to access Batch Analysis?", "a": "..."},
+  {"q": "Why is my report missing?",     "a": "..."}
+]
+本地打包部署完整流程：
+
+1. gradio build              → 生成静态文件
+2. pip install + zip         → 打包Lambda（或ECR镜像）
+3. aws s3 sync ./build       → 上传前端到S3 frontend
+4. aws s3 sync ./vector_db   → 上传向量库到S3
+5. aws lambda update         → 上传业务逻辑
+6. 配置 API Gateway          → 绑定Lambda路由
+7. 配置 CloudFront           → 绑定S3 + API Gateway
+面试话术：
+
+"我参考了 AWS 标准 Serverless 架构：
+前端 Gradio 静态文件托管在 S3 frontend，通过 CloudFront 做 CDN 分发和 HTTPS；
+后端 RAG 的四步 Harness 逻辑部署在 Lambda，通过 API Gateway 做路由；
+对话历史存在 S3 memory 持久化；
+LLM 层用 Bedrock 的 Claude 3 Sonnet，Embedding 用 Titan v2。整个架构无服务器，按用量付费，运维成本极低。"
+
+题25：AWS 各模块收费是多少？
+面试官问法：
+
+"这套架构部署到 AWS 大概要花多少钱？各模块怎么收费？"
+
+核心考察点： 对云成本的实际认知，工程成熟度体现
+
+答案框架：
+
+逐模块费用：
+
+S3（两个 Bucket）：
+
+Table
+
+
+项目	费率	演示项目预估
+存储	$0.023/GB/月	前端50MB+对话记录20MB ≈ <$0.01/月
+GET请求	$0.0004/1000次	<$0.01/月
+PUT请求	$0.005/1000次	<$0.01/月
+CloudFront：
+
+Table
+
+
+项目	费率	演示项目预估
+流量（前1TB）	$0.0085/GB	~1GB = $0.009/月
+HTTPS请求	$0.0075/1万次	<$0.01/月
+API Gateway：
+
+Table
+
+
+项目	费率	演示项目预估
+REST API调用	$3.5/百万次	新账号前12个月100万次/月免费
+Lambda：
+
+Table
+
+
+项目	费率	演示项目预估
+请求次数	$0.2/百万次	永久免费：100万次/月
+计算时长	$0.0000166667/GB-秒	永久免费：40万GB-秒/月
+RAG单次调用	约3-5秒×512MB	1000次≈2560GB-秒，在免费额度内
+Bedrock（唯一真实花钱的部分）：
+
+Table
+
+
+模型	Input	Output
+Claude 3 Sonnet	$3/百万tokens	$15/百万tokens
+Titan Embedding v2	$0.02/百万tokens	—
+每次RAG问答实际成本：
+  Input:  ~1000 tokens × $3/百万  = $0.003
+  Output: ~300  tokens × $15/百万 = $0.0045
+  单次合计 ≈ $0.0075
+
+100次问答  ≈ $0.75
+1000次问答 ≈ $7.50
+Secrets Manager（存Azure OpenAI Key）：
+
+Table
+
+
+项目	费率
+每个Secret	$0.40/月（固定）
+API调用	$0.05/1万次
+总费用汇总：
+
+Table
+
+
+模块	月费用
+S3 (frontend + memory)	~$0.01
+CloudFront	~$0.01
+API Gateway	~$0（免费额度）
+Lambda	~$0（免费额度）
+Bedrock（100次问答）	~$0.75
+Secrets Manager	~$0.40
+合计	~$1.2/月
+面试话术：
+
+"整个架构成本非常低。S3、CloudFront、API Gateway、Lambda 在演示规模下基本都在免费额度内。主要成本来自两块：Bedrock 模型调用大约每次问答 $0.0075，100次问答约 $0.75；Secrets Manager 存 Key 固定 $0.40/月。整体演示项目月成本控制在 $1-2 以内。如果切换回 Azure OpenAI，Bedrock 费用就没有了，基础设施成本接近零。"
+
+题26：Secrets Manager 管理敏感信息
+面试官问法：
+
+"你本地用 .env 存 API Key，部署到 AWS 之后怎么处理敏感信息？如果 Key 泄露了怎么办？"
+
+核心考察点： 生产环境安全意识、从本地到云端的安全迁移
+
+答案框架：
+
+本地 vs 生产对比：
+
+本地开发：
+  .env → load_dotenv() → os.getenv("OPENAI_API_KEY")
+  ⚠️ 风险：.env 不小心 git push → Key 泄露
+
+AWS生产：
+  Secrets Manager → IAM Role授权 → Lambda读取
+  ✅ Key 不出现在任何代码或配置文件里
+迁移步骤：
+
+
+Copy
+bash
+# Step 1: 把Key存入Secrets Manager
+aws secretsmanager create-secret \
+  --name strela/azure-openai \
+  --secret-string '{"api_key":"xxx","endpoint":"https://xxx.openai.azure.com"}'
+
+# Step 2: 给Lambda的IAM Role授权
+{
+  "Effect": "Allow",
+  "Action": "secretsmanager:GetSecretValue",
+  "Resource": "arn:aws:secretsmanager:*:*:secret:strela/*"
+}
+Lambda代码变化：
+
+
+Copy
+python
+# 本地版本
+load_dotenv(override=True)
+api_key = os.getenv("OPENAI_API_KEY")
+
+# AWS生产版本
+import boto3, json
+
+def get_secret():
+    client = boto3.client('secretsmanager', region_name='us-east-1')
+    secret = client.get_secret_value(SecretId='strela/azure-openai')
+    return json.loads(secret['SecretString'])
+
+secrets  = get_secret()
+api_key  = secrets['api_key']
+endpoint = secrets['endpoint']
+三道防线：
+
+Table
+
+
+防线	措施
+存储安全	Secrets Manager 加密存储，不硬编码
+访问控制	IAM Role 限制只有 Lambda 能读这个 Secret
+泄露应对	Azure Portal 立即 Rotate Key → Secrets Manager 同步更新 → Lambda 无需重新部署
+.gitignore 必加项：
+
+.env
+*.env
+vector_db/        ← 向量库是构建产物，不上传git
+__pycache__/
+*.pyc
+⚠️ 注意：.gitignore 加 vector_db/ 只是不上传 git，向量库单独用 aws s3 sync 上传到 S3，两个操作互不影响。
+
+面试话术：
+
+"本地开发用 .env 加 load_dotenv，但部署到 AWS 之后把 Azure OpenAI 的 Key 和 Endpoint 迁移到 Secrets Manager，
+Lambda 通过 IAM Role 授权读取，代码里不出现任何明文凭证。如果 Key 泄露，第一步在 Azure Portal 立即 Rotate，
+第二步更新 Secrets Manager 里的值，Lambda 下次调用自动拿到新 Key，不需要重新部署代码。.gitignore 里必须加 .env 和 vector_db，前者防止 Key 泄露，后者因为向量库是构建产物，单独用 aws s3 sync 上传。"
+
+
+题27：Lambda 的限制和注意事项
+面试官问法：
+
+"你的 RAG 逻辑部署在 Lambda，Lambda 有哪些限制？你的项目有没有踩到这些坑？"
+
+核心考察点： 对 Serverless 架构局限性的认知，理论结合项目实际
+
+答案框架：
+
+Lambda 六大限制：
+
+Table
+
+
+限制	具体数值	你项目的影响 & 应对
+执行超时	最长 15分钟	RAG单次问答3-5秒，完全没问题 ✅
+包大小	ZIP 250MB / 容器镜像 10GB	langchain+chromadb+faiss超250MB ⚠️ → 用ECR容器镜像
+内存上限	128MB ~ 10GB	ChromaDB加载向量库需要内存 → 建议设1024MB
+临时存储	/tmp 最大 512MB	vector_db从S3下载到/tmp，够用 ✅
+冷启动	首次调用延迟1-3秒	对话类可接受，可用Provisioned Concurrency预热
+并发限制	默认1000/region	演示项目完全够用 ✅
+最关键的两个坑：
+
+坑一：包大小超限
+
+
+Copy
+bash
+# 问题：直接打zip超过250MB
+pip install langchain chromadb faiss-cpu -t ./package
+cd package && zip -r ../deploy.zip .
+# du -sh deploy.zip → 380MB ❌ 超限
+
+# 解决方案：改用ECR容器镜像
+# Dockerfile
+FROM public.ecr.aws/lambda/python:3.11
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY lambda_function.py .
+CMD ["lambda_function.lambda_handler"]
+
+# 构建并推送到ECR
+docker build -t strela-advisor .
+docker tag strela-advisor:latest \
+  123456789.dkr.ecr.us-east-1.amazonaws.com/strela-advisor:latest
+docker push \
+  123456789.dkr.ecr.us-east-1.amazonaws.com/strela-advisor:latest
+坑二：无持久化存储
+
+
+Copy
+python
+# 问题：Lambda每次调用是全新环境
+# vector_db不能存本地，下次调用就没了
+
+# 解决方案：S3 + /tmp缓存
+def load_vectordb():
+    # 先检查/tmp有没有缓存（同一容器复用时有）
+    if os.path.exists('/tmp/vector_db/chroma.sqlite3'):
+        print("✅ 复用缓存 vector_db")
+        return
+
+    # 没有就从S3下载到/tmp
+    print("⬇️ 从S3加载 vector_db...")
+    s3 = boto3.client('s3')
+    objects = s3.list_objects_v2(
+        Bucket='strela-advisor-vectordb'
+    )
+    for obj in objects['Contents']:
+        key = obj['Key']
+        os.makedirs(f'/tmp/{os.path.dirname(key)}',
+                    exist_ok=True)
+        s3.download_file(
+            'strela-advisor-vectordb',
+            key,
+            f'/tmp/{key}'
+        )
+冷启动优化（加分项）：
+
+问题：Lambda长时间不调用，容器被回收
+     下次调用需要重新初始化，延迟1-3秒
+
+解决：Provisioned Concurrency（预置并发）
+     保持N个容器常驻，消除冷启动
+     代价：按预置数量收费，演示项目不需要
+面试话术：
+
+"Lambda 我主要踩了两个坑：
+第一是包大小，LangChain 加 ChromaDB 加 faiss 超过了 250MB 的 ZIP 限制，解决方案是改用 ECR 容器镜像部署，上限 10GB 完全够用。
+第二是无持久化存储，Lambda 每次调用是全新环境，向量库不能存本地，我的方案是把 vector_db 存在 S3，Lambda 启动时下载到 /tmp 目录，同一个容器复用时 /tmp 数据还在，不需要重复下载，节省冷启动时间。"
+
+题28：向量数据库怎么部署到 AWS？
+面试官问法：
+
+"你本地用 ChromaDB，部署到 AWS 之后向量库怎么处理？有没有更好的方案？"
+
+核心考察点： 从本地原型到云端生产的迁移思路
+
+答案框架：
+
+三个方案对比：
+
+方案一：ChromaDB + S3（你现在的方案）
+
+本地构建 vector_db/
+    ↓
+aws s3 sync ./vector_db s3://strela-advisor-vectordb/
+    ↓
+Lambda 冷启动时从 S3 下载到 /tmp
+    ↓
+ChromaDB 加载 /tmp/vector_db 正常检索
+
+优点：改动最小，成本最低
+缺点：每次冷启动要下载，知识库更新麻烦
+适合：演示项目 ✅
+方案二：Pinecone（云原生向量库）
+
+
+Copy
+python
+# 本地构建时直接写入Pinecone
+from pinecone import Pinecone
+
+pc = Pinecone(api_key="xxx")
+index = pc.Index("strela-advisor")
+
+# 上传向量
+index.upsert(vectors=[
+    {"id": "doc1", "values": embedding, "metadata": {"text": "..."}}
+])
+
+# Lambda里直接连接检索，不需要下载任何文件
+results = index.query(
+    vector=query_embedding,
+    top_k=3,
+    include_metadata=True
+)
+
+优点：全托管，Lambda直连，知识库实时更新
+缺点：收费，数据在第三方
+适合：生产环境
+方案三：AWS OpenSearch with Vector（全AWS生态）
+
+优点：AWS原生，和Lambda/IAM无缝集成
+     支持混合检索（向量+关键词）
+     企业级可扩展
+缺点：配置复杂，成本较高
+适合：企业级生产环境
+方案选择逻辑：
+
+演示/原型  → ChromaDB + S3（方案一）✅ 你现在
+生产环境   → Pinecone（方案二）
+企业级     → AWS OpenSearch（方案三）
+知识库更新流程（方案一）：
+
+新增/修改知识库文档
+    ↓
+本地重新构建 vector_db
+    ↓
+aws s3 sync ./vector_db s3://strela-advisor-vectordb/
+    ↓
+Lambda 下次冷启动自动加载新版本
+面试话术：
+
+"我的方案是把 ChromaDB 的 vector_db 目录上传到 S3，Lambda 冷启动时下载到 /tmp 加载，改动最小，成本接近零，适合演示项目。如果要上生产，我会迁移到 Pinecone，Lambda 直接连接云端向量库检索，不需要下载文件，知识库更新也更方便，直接推送新向量就行。全 AWS 生态的话可以用 OpenSearch with Vector，支持混合检索，和 IAM 无缝集成，适合企业级场景。"
+
+题29：项目上线后怎么监控和维护？
+面试官问法：
+
+"假设你的项目真的上线了，你怎么保证它持续稳定运行？出问题了怎么发现？"
+
+核心考察点： 工程成熟度、生产意识、闭环思维
+
+答案框架：
+
+监控体系三层：
+
+第一层：基础设施监控（AWS CloudWatch）
+
+
+Copy
+python
+# Lambda 自动上报到 CloudWatch 的指标
+关注指标：
+  - Duration：每次调用耗时（RAG正常3-5秒，超10秒告警）
+  - Errors：错误率（超1%告警）
+  - Throttles：被限流次数
+  - ConcurrentExecutions：并发数
+
+# 设置告警
+aws cloudwatch put-metric-alarm \
+  --alarm-name "strela-lambda-errors" \
+  --metric-name Errors \
+  --threshold 5 \
+  --evaluation-periods 1 \
+  --alarm-actions arn:aws:sns:...  # 发邮件/短信通知
+第二层：业务质量监控（RAG指标）
+
+
+Copy
+python
+# 每次问答后异步记录质量指标
+def log_qa_metrics(question, answer, docs, latency):
+    metrics = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "latency_ms": latency,
+        "docs_retrieved": len(docs),
+        "answer_length": len(answer),
+        "has_fallback": "无法确定" in answer  # 检测是否触发fallback
+    }
+    # 存到 S3 memory，定期分析
+    s3.put_object(
+        Bucket='strela-advisor-memory',
+        Key=f'metrics/{datetime.now().date()}/{uuid4()}.json',
+        Body=json.dumps(metrics)
+    )
+第三层：用户反馈监控
+
+Gradio 界面加 👍👎 按钮
+    ↓
+用户点踩 → 记录问题和回答
+    ↓
+定期人工复核差评
+    ↓
+发现系统性问题 → 更新知识库或优化Prompt
+维护流程：
+
+知识库更新：
+
+Strela 系统更新文档
+    ↓
+更新 knowledge_base/ 里的 .md 文件
+    ↓
+本地重新构建 vector_db
+    ↓
+aws s3 sync 上传新版本
+    ↓
+Lambda 下次冷启动自动加载
+模型升级：
+
+OpenAI 发布新模型
+    ↓
+在测试环境跑 RAGAS 评估对比
+    ↓
+新模型指标更好 → 更新 Secrets Manager 里的模型名
+    ↓
+Lambda 无需重新部署，下次调用生效
+故障应对 SOP：
+
+告警触发
+    ↓
+Step 1: 看 CloudWatch Logs 定位错误
+Step 2: 判断是代码问题还是依赖问题
+    ├── API Key 过期 → Secrets Manager 更新
+    ├── 向量库损坏  → S3 重新上传
+    ├── Lambda超时  → 检查Bedrock响应时间
+    └── 代码Bug     → 回滚上一个版本
+Step 3: 修复后重新跑评估确认恢复
+面试话术：
+
+"监控我分三层：
+第一层是 AWS CloudWatch 监控基础设施，关注 Lambda 的耗时、错误率和限流，超阈值自动告警。
+第二层是业务质量监控，每次问答异步记录延迟、检索文档数、是否触发 fallback，存到 S3 定期分析趋势。
+第三层是用户反馈，Gradio 界面加点赞点踩，差评定期人工复核，发现系统性问题就更新知识库或优化 Prompt。维护上最重要的是知识库更新流程，Strela 文档变了就重新构建 vector_db 推到 S3，Lambda 冷启动自动加载新版本，整个过程不需要改代码。"
