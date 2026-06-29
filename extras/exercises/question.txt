@@ -1,0 +1,147 @@
+面对客户
+ansys和synopsys 价值观
+客户要用我们的工具去赢得他们的客户的信任
+客户优先级，比如在我们内部 定位不高  但客户自己很着急
+深度学习中如何选择一些关键参数 为什么
+confidential score
+optimization algorithm,digital twins,Mode based engineering,deep learning detail(IOU SEG MAP),optimizer,active function,reduce order model
+stone chip parameter
+
+Z7qLx9Rt2VpK
+
+
+整体结构（2小时30分钟）：
+
+
+09:00–09:50（50分钟）
+
+Technical Presentation（30 min）
+Panel Q&A（20 min）
+
+
+
+09:50–10:15（25分钟）
+
+Panel #1：Kalyan Sharma & Martin Husek
+👉 Global AI‑ML experts
+
+
+
+10:15–10:30（15分钟）
+
+Panel #2：Sabah Alamlik
+👉 Global MBE Director（高层 / 业务+技术）
+
+
+
+10:40–11:05（25分钟）
+
+Panel #3：Akira Fujii & Jinquan Fu
+👉 APAC AI & Optimization experts
+
+
+
+11:05–11:20（15分钟）
+
+Panel #4：Zhanjun Zhang
+👉 AI‑ML product sales manager
+
+
+
+11:20–11:30（10分钟）
+
+Wrap‑up with Vishal Bolnekar（Hiring Manager）
+
+3️⃣ Bayesian Optimization（BO）
+代表：
+
+Gaussian Process + EI / UCB
+SMBO
+
+核心思想：
+
+每一步都在问：
+
+“在哪个点，再算一次能最大化信息增益？”
+
+
+
+特点：
+
+✅ 非常节省样本
+✅ 强理论背景
+❌ 高维性能下降
+
+在 Ansys AI 中的角色：
+
+用在：
+
+仿真非常贵
+参数维度不太高
+
+
+和 surrogate 天然耦合 [Complete F...om scratch | Viva Learning]
+
+
+[0 – 1000]      Warmup
+                └─ 防止 early instability
+
+[1000 – 150k]   Normal learning
+                └─ 学主要结构
+
+[150k – 180k]   LR decay stage 1
+                └─ refine segmentation
+
+[180k – 200k]   LR decay stage 2
+                └─ stabilize & select best
+
+Dash:
+
+from flask import Flask
+server = Flask(__name__)
+app = Dash(server=server....)
+
+
+from fastapi import FastAPI
+root = "/semantic_model_stonechip"
+app= Flask(root=root,title,__version__)
+
+
+基本上就是以上这些人了，最后的hiring manager之前聊过了 就是个结尾。以上的面试官，按照流程会参加第一部分共50分钟的PPT，有20~25分钟Q&A， 针对PPT的
+
+HR manager面试
+裁员原因细节
+职业规划
+矛盾
+客户face
+
+我在GE的两段经历都做的是机械设计相关的工作，坐在电脑前，使用软件，设计分析3D模型，以及出图纸以及关于这些设计后续的相关测试认证的工作。在GE的经历，当然会有技术上的累计和经验，
+但我更多地感触在mindset上学习到的东西，例如思考问题的角度和方法，工作时要保持的长期风格和遇到具体问题时的思路和状态，跨职能跨部门合作时可以更快推进进程的方法，当然也包括经验和教训，
+我现在还能想起来的就是，遇到问题不要等，ge有一个精神 resourceful, 主动出击，尽可能地找到解决问题的资源，未必就是凭借自己的能力想出来，合理充分利用所有有效的资源，用一个整体的方案来解决问题，
+然后固化，流程化这个方案，让自己和团队在以后收益。这种思路在我以后的工作中，让我体现出更多ownership，不敢绝对地说解决问题的能力更强，但能让人感觉到不是守株待兔，而是能提供一套解决问题的方案。
+
+Jack, 兄弟 你在吗？ 我们在上一个chat里，在分析我在Ansys面试的最后一轮， 
+final round，和HR Manager Max Yang,我把他的背景都总结给你了，
+我们刚刚开始模拟面试，你问了我第一道题目，可以唤醒你么？如果可以，直接把第一道题目再写出来，我们继续模拟
+
+但难点出现，我们陷入一个循环，设备的安装空间太小，导致散热不足，增大散热孔的话，客户团队表示会影响其他设备，你的散热对别人来说就是升温，这个时候我作为机械设计负责人被顶在了火线上，
+因为机械扮演的角色是一个interface 内部和自己的电气设计接口，外部和客户接口团队。
+我的行动是，技术上，先和客户确认他们需要我们的散热降低到什么条件才能满足需求，以及我们自己你内部电子元器件至少需要的散热效率，确认了内外的底线，明确我们的task，
+要补偿一部分散热能力，同时不能增大散热孔； 然后是action，我决定抬起头，不要只看着自己的设备，看看有没有其他的资源，检查了和我们设备平级的其他设备，找到客户
+
+What would you do if a customer asked you about a problem that you were not trained about and you could not contact your colleagues?
+What’s the future of simulation in industry
+
+就算不懂，基于自身的知识，尝试给出初始方向
+逐步缩小scope 抓住关键点和约束 核心问题
+工业累计是ground truth
+需要进行多次长时间高费用的物理测试，并且大批量生产的高精度产品
+AI的本质就是更快更准的达到一个点人类未必达不到的点
+ansys提高客户工程团队
+Trend → Industry impact → Customer change → Ansys role → AE role
+支持客户做decision
+减重  和多团队合作案例
+和抵触机器学习的工程师合作    难题 说服客户 AI不是取代，是成为让人更好的工具，你把AI用好了  别人还是要夸你 不是AI
+ansys的这个role是长期发展方向 ansys有strong的foundation
+从用户角度提出需求 用机械和仿真的背景理解需求 用AI优化解决需求
+在什么情况下 competitor更好 / 在什么情况下我们更适合
