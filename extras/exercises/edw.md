@@ -3030,3 +3030,53 @@ def compute(xls_data, xlsx_data, abakus_calculated, raw_data, file_names):
     abakus_calculated.write_dataframe(df_calculated)
 
 
+	import requests
+
+HOSTNAME = host_name
+TOKEN = token
+headers = {
+    "authorization": "Bearer {}".format(TOKEN)
+}
+
+# response = requests.get('https://{}/api/v2/ontologies'.format(HOSTNAME), headers=headers)
+# pprint(response.json())
+
+
+
+host_name = 'holunder.palantirfoundry.de'
+
+# url = f"https://{host_name}/api/v2/ontologies"
+url = f"https://{host_name}/api/v2/ontologies/ri.ontology.main.ontology.00000000-0000-0000-0000-000000000000/objects/EdFormulation/search"
+
+
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Content-Type": "application/json"
+}
+
+body = {
+    "where": {
+                'type':'',
+                'field':'',
+                'value':''
+    }
+
+}
+
+# body = {
+#     "where": {
+#                 'value':{
+#                     'type':'eq',
+#                     'field':'batchId',
+#                     'value': 'L00131-23-R0130'
+#                         }
+#                 }
+
+# }
+
+# response = requests.post(url, headers=headers, json=body)
+
+# print(response.status_code)
+# pprint(response.json())
+
+
