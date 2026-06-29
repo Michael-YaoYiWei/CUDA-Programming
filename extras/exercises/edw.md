@@ -2866,3 +2866,167 @@ ________________________________________
 你现在的准备已经是顶配了。
 去拿下它，等你的好消息。 🎯
 
+from pyspark.sql import functions as F
+from transforms.api import transform, Input, Output, incremental
+from myproject.datasets.global_variables import semantic_version
+
+
+@incremental(semantic_version=semantic_version)
+@transform(
+    file_names=Output("ri.foundry.main.dataset.4d3654ad-8564-4e8d-ac9d-5fd5764c84d1"),
+    abakus_calculated=Output("ri.foundry.main.dataset.42815206-93b7-4b4a-9282-76dcf8d00344"),
+    raw_data=Output("ri.foundry.main.dataset.897bef5e-a721-49a3-bddc-72267c3184db"),
+    xls_data=Input("ri.foundry.main.dataset.c1663894-1473-41fc-870c-f6a3c9e3d9c7"),
+    xlsx_data=Input("ri.foundry.main.dataset.1edb0927-8edd-4a54-91ed-4b362521f765")
+)
+def compute(xls_data, xlsx_data, abakus_calculated, raw_data, file_names):
+    xls_data = xls_data.dataframe()
+    xlsx_data = xlsx_data.dataframe()
+
+    xlsx_file_names = (
+        xlsx_data
+        .select(
+            "filename",
+            "modified",
+            "DATA_SOURCE",
+            "0",
+            F.col("5").alias("4"),
+            F.col("6").alias("5"),
+            F.col("9").alias("8"),
+            F.col("10").alias("9"),
+            F.col("12").alias("11"),
+
+        )
+        )
+
+    df_file_names = (
+        xls_data
+        .unionByName(xlsx_file_names, allowMissingColumns=True)
+        .filter(
+           ~F.col("0").isin(*range(1, 23))
+        )
+        .withColumn(
+            "PRIMARY_KEY",
+                F.sha2(
+                    F.concat_ws("_", F.col("filename"), F.col("DATA_SOURCE")),
+                    256
+                )
+            )
+    )
+
+    xlsx_raw_data = (
+        xlsx_data
+        .filter(
+           F.col("0").isin(*range(1, 23))
+        )
+        .filter(
+           F.coalesce(*[F.col(str(i)) for i in range(1, 12)]).isNotNull()
+        )
+        .drop(
+            "13",
+            "14",
+            "15",
+            )
+    )
+
+    df_raw = (
+        xls_data
+        .filter(
+           F.col("0").isin(*range(1, 23))
+        )
+        .select(
+            "filename",
+            "0",
+            F.col("1").alias("2"),
+            F.col("2").alias("3"),
+            F.col("3").alias("4"),
+            F.col("4").alias("5"),
+            F.col("5").alias("6"),
+            F.col("6").alias("7"),
+            F.col("7").alias("8"),
+            F.col("8").alias("9"),
+            F.col("9").alias("10"),
+            F.col("10").alias("11"),
+            F.col("11").alias("12"),
+            "modified",
+            "DATA_SOURCE",
+        )
+        .unionByName(
+            xlsx_raw_data,
+            allowMissingColumns=True
+        )
+        .withColumn(
+            "PRIMARY_KEY",
+                F.sha2(
+                    F.concat_ws("_", F.col("filename"), F.col("DATA_SOURCE"), F.col("0")),
+                    256
+                )
+            )
+        .withColumn(
+            "META_DATA_KEY",
+                F.sha2(
+                    F.concat_ws("_", F.col("filename"), F.col("DATA_SOURCE")),
+                    256
+                )
+            )
+
+    )
+
+    list_for_calculated_df_filter = [
+        "RAD intern",
+        "Abakus 1x1  LIMS - Prüfart",
+        "GKD intern",
+        "Abakus 1x1  LIMS - test specification",
+        'GKD internal',
+        'Particle µg/g'
+        ]
+
+    df_calculated_xlsx = (
+        xlsx_data
+        .select(
+            "filename",
+            "modified",
+            "DATA_SOURCE",
+            F.col("13").alias("12"),
+            F.col("14").alias("13"),
+            F.col("15").alias("14"),
+        )
+        .filter(
+            ~F.col("12").isin(
+                list_for_calculated_df_filter
+            )
+        )
+    )
+
+    df_calculated = (
+        xls_data
+        .filter(
+            ~F.col("12").isin(
+                list_for_calculated_df_filter
+            )
+        )
+        .select(
+            "filename",
+            "modified",
+            "DATA_SOURCE",
+            "12",
+            "13",
+            "14",
+        )
+        .unionByName(
+            df_calculated_xlsx
+        )
+        .withColumn(
+            "PRIMARY_KEY",
+                F.sha2(
+                    F.concat_ws("_", F.col("filename"), F.col("DATA_SOURCE")),
+                    256
+                )
+            )
+    )
+
+    file_names.write_dataframe(df_file_names)
+    raw_data.write_dataframe(df_raw)
+    abakus_calculated.write_dataframe(df_calculated)
+
+
